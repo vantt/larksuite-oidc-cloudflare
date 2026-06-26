@@ -39,6 +39,7 @@ async function getPrivateKey(pem: string): Promise<CryptoKey> {
 
 /**
  * Generates and signs an OIDC compliant ID Token (JWT).
+ * Throws if jwtPrivateKeyPem or jwtKeyId are missing/invalid.
  */
 export async function generateIdToken({
   userInfo,
@@ -49,7 +50,15 @@ export async function generateIdToken({
   jwtKeyId,
   jwtPrivateKeyPem,
 }: IdTokenConfig): Promise<string> {
+  if (!jwtPrivateKeyPem) {
+    throw new Error('JWT signing key (JWT_PRIVATE_KEY_PEM) is not configured');
+  }
+  if (!jwtKeyId) {
+    throw new Error('JWT key ID (JWT_KEY_ID) is not configured');
+  }
+
   const now = Math.floor(Date.now() / 1000);
+  const hasRealEmail = !!(userInfo.enterprise_email || userInfo.email);
 
   const payload: OpenIDToken = {
     // OIDC required claims
@@ -63,6 +72,7 @@ export async function generateIdToken({
     // Standard claims
     name: userInfo.name,
     email: transformEmail(userInfo, domain),
+    email_verified: hasRealEmail,
     picture: userInfo.avatar_url,
   };
 

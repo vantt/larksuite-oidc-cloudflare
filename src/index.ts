@@ -46,14 +46,14 @@ function validateRedirectUri(
   // When no allowlist is configured, deny all redirects (secure by default)
   if (allowedUris.length === 0) {
     // Exception: allow test page redirect when debug mode is enabled
-    const isTestPage = env.DEBUG_PAGE !== 'false' && redirectUri === `${issuerBaseUrl}/test`;
+    const isTestPage = env.DEBUG_PAGE === 'true' && redirectUri === `${issuerBaseUrl}/test`;
     if (!isTestPage) {
       return 'No ALLOWED_REDIRECT_URIS configured — all redirect_uri values are denied';
     }
     return null;
   }
 
-  const isTestPageAllowed = env.DEBUG_PAGE !== 'false' && redirectUri === `${issuerBaseUrl}/test`;
+  const isTestPageAllowed = env.DEBUG_PAGE === 'true' && redirectUri === `${issuerBaseUrl}/test`;
   if (!allowedUris.includes(redirectUri) && !isTestPageAllowed) {
     return 'Unauthorized redirect_uri';
   }
@@ -139,6 +139,7 @@ export default {
           userinfo_endpoint: issuerHelper.userinfoEndpoint,
           jwks_uri: issuerHelper.jwksUri,
           response_types_supported: ['code'],
+          grant_types_supported: ['authorization_code'],
           subject_types_supported: ['public'],
           id_token_signing_alg_values_supported: ['RS256'],
           scopes_supported: ['openid', 'profile', 'email'],
@@ -150,7 +151,7 @@ export default {
     }
 
     // Serve interactive diagnostic console
-    if (url.pathname === '/test' && env.DEBUG_PAGE !== 'false') {
+    if (url.pathname === '/test' && env.DEBUG_PAGE === 'true') {
       return new Response(testPageHtml, {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
@@ -158,10 +159,14 @@ export default {
 
     // JWKS endpoint - provides public keys for verifying JWT signatures
     if (url.pathname === issuerHelper.jwksPath) {
+      let jwk: unknown;
+      try {
+        jwk = JSON.parse(env.JWT_PUBLIC_KEY_JWK);
+      } catch {
+        return jsonError({ error: 'server_error', error_description: 'JWKS configuration error' }, 500);
+      }
       return new Response(
-        JSON.stringify({
-          keys: [JSON.parse(env.JWT_PUBLIC_KEY_JWK)],
-        }),
+        JSON.stringify({ keys: [jwk] }),
         {
           headers: { 'Content-Type': 'application/json' },
         }
@@ -280,22 +285,29 @@ export default {
       return Response.redirect(redirectUrl.toString());
     }
 
+    // token endpoint — reject non-POST with 405 per RFC 6749 §3.2
+    if (url.pathname === issuerHelper.tokenPath && request.method !== 'POST') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { 'Allow': 'POST', 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+
     // token endpoint
     // Exchange Feishu code for token, and generate token required by OIDC
     if (url.pathname === issuerHelper.tokenPath && request.method === 'POST') {
-      const formData = (await request.formData()) as {
-        get<TKey extends keyof OAuth2AccessTokenRequest>(
-          key: TKey
-        ): OAuth2AccessTokenRequest[TKey];
-        get<TKey extends keyof OAuth2AccessTokenRequestWithAuth>(
-          key: TKey
-        ): OAuth2AccessTokenRequestWithAuth[TKey];
-        has(key: keyof OAuth2AccessTokenRequestWithAuth): boolean;
-        has(key: string): false;
-      };
+      let formData: FormData;
+      try {
+        formData = await request.formData();
+      } catch {
+        return jsonError({
+          error: 'invalid_request',
+          error_description: 'Request body must be application/x-www-form-urlencoded',
+        }, 400);
+      }
 
       // Validate grant_type per RFC 6749 §4.1.3
-      const grantType = formData.get('grant_type');
+      const grantType = formData.get('grant_type') as string | null;
       if (grantType !== 'authorization_code') {
         return jsonError({
           error: 'unsupported_grant_type',
@@ -320,42 +332,66 @@ export default {
               clientSecret = '';
             }
           } catch {
-            return textError('Invalid Basic Authentication encoding', 400);
+            return jsonError({
+              error: 'invalid_client',
+              error_description: 'Invalid Basic Authentication encoding',
+            }, 400);
           }
         }
       }
       if (formData.has('client_id')) {
-        clientId = formData.get('client_id');
+        clientId = formData.get('client_id') as string;
       }
       if (formData.has('client_secret')) {
-        clientSecret = formData.get('client_secret');
+        clientSecret = formData.get('client_secret') as string;
       }
       if (!clientId || !clientSecret) {
-        return textError('Missing client authentication', 401);
+        return jsonError({
+          error: 'invalid_client',
+          error_description: 'Missing client authentication',
+        }, 401);
       }
 
       const clientIdError = validateClientId(clientId, env);
       if (clientIdError) {
-        return textError(clientIdError, 400);
+        return jsonError({
+          error: 'invalid_client',
+          error_description: clientIdError,
+        }, 400);
       }
 
-      const code = formData.get('code'); // This is the Feishu code received from client
+      const code = formData.get('code') as string | null;
+      if (!code) {
+        return jsonError({
+          error: 'invalid_request',
+          error_description: 'Missing code parameter',
+        }, 400);
+      }
 
-      const redirectUriParam = formData.get('redirect_uri');
+      const redirectUriParam = formData.get('redirect_uri') as string | null;
       if (!redirectUriParam) {
-        return textError('Missing redirect_uri parameter', 400);
+        return jsonError({
+          error: 'invalid_request',
+          error_description: 'Missing redirect_uri parameter',
+        }, 400);
       }
 
       let parsedRedirectUrl: URL;
       try {
         parsedRedirectUrl = new URL(redirectUriParam);
       } catch {
-        return textError('Invalid redirect_uri format (must be a valid absolute URL)', 400);
+        return jsonError({
+          error: 'invalid_request',
+          error_description: 'Invalid redirect_uri format (must be a valid absolute URL)',
+        }, 400);
       }
 
       const redirectError = validateRedirectUri(parsedRedirectUrl.toString(), env, issuerHelper.baseUrl);
       if (redirectError) {
-        return textError(redirectError, 400);
+        return jsonError({
+          error: 'invalid_request',
+          error_description: redirectError,
+        }, 400);
       }
 
       const redirectUrl = new URL(
@@ -370,11 +406,10 @@ export default {
       }, feishuEndpoints);
 
       if (feishuTokenData.code !== 0) {
-        console.warn('Failed to obtain access token from Feishu: ', feishuTokenData);
+        console.warn(`Feishu token exchange failed: code=${feishuTokenData.code}`);
         return jsonError({
-          error: 'invalid_request',
-          error_description: (feishuTokenData as FeishuAccessTokenErrorResponse)
-            .error_description,
+          error: 'invalid_grant',
+          error_description: 'Token exchange with upstream provider failed',
         }, 400);
       }
 
@@ -388,7 +423,7 @@ export default {
       const userInfo = await FeishuClient.getUserInfo(access_token, feishuEndpoints);
 
       if (userInfo.code !== 0 || !userInfo.data) {
-        console.warn('Failed to obtain user info from Feishu: ', userInfo);
+        console.warn(`Feishu user info failed: code=${userInfo.code}`);
         return jsonError({
           error: 'invalid_request',
           error_description: 'Failed to fetch user info',
@@ -397,39 +432,45 @@ export default {
 
       // Retrieve and immediately delete code-nonce (single-use enforcement)
       let nonce: string | null = null;
-      if (code) {
-        nonce = await nonceManager.getCodeNonce(code);
-        if (nonce) {
-          await nonceManager.deleteCodeNonce(code);
-        }
+      nonce = await nonceManager.getCodeNonce(code);
+      if (nonce) {
+        await nonceManager.deleteCodeNonce(code);
       }
 
       // Generate OIDC response with required cache headers (RFC 6749 §5.1)
-      return new Response(
-        JSON.stringify({
-          access_token: access_token,
-          token_type: 'Bearer',
-          refresh_token,
-          id_token: await generateIdToken({
-            userInfo: userInfo.data,
-            clientId,
-            nonce,
-            issuer: issuerHelper.issuer,
-            domain: env.DOMAIN,
-            jwtKeyId: env.JWT_KEY_ID,
-            jwtPrivateKeyPem: env.JWT_PRIVATE_KEY_PEM,
-          }),
-          expires_in,
-          scope: transformFeishuScope(scope),
-        } satisfies OpenIDSuccessTokenResponse),
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-store',
-            'Pragma': 'no-cache',
-          },
-        }
-      );
+      try {
+        return new Response(
+          JSON.stringify({
+            access_token: access_token,
+            token_type: 'Bearer',
+            refresh_token,
+            id_token: await generateIdToken({
+              userInfo: userInfo.data,
+              clientId,
+              nonce,
+              issuer: issuerHelper.issuer,
+              domain: env.DOMAIN,
+              jwtKeyId: env.JWT_KEY_ID,
+              jwtPrivateKeyPem: env.JWT_PRIVATE_KEY_PEM,
+            }),
+            expires_in,
+            scope: transformFeishuScope(scope),
+          } satisfies OpenIDSuccessTokenResponse),
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-store',
+              'Pragma': 'no-cache',
+            },
+          }
+        );
+      } catch (err: any) {
+        console.error(`ID token generation failed: ${err?.message}`);
+        return jsonError({
+          error: 'server_error',
+          error_description: 'Failed to generate ID token',
+        }, 500);
+      }
     }
 
     // userinfo endpoint - forward directly to Feishu

@@ -185,7 +185,7 @@ export type OAuth2AccessTokenErrorResponse = {
    * Values for the `error` parameter MUST NOT include characters
    * outside the set %x20-21 / %x23-5B / %x5D-7E.
    */
-  error: "invalid_request" | "invalid_client" | "invalid_grant" | "unauthorized_client" | "unsupported_grant_type" | "invalid_scope";
+  error: "invalid_request" | "invalid_client" | "invalid_grant" | "unauthorized_client" | "unsupported_grant_type" | "invalid_scope" | "server_error";
 
   /**
    * Human-readable ASCII [USASCII] text providing additional information, used to assist the client developer in understanding the error that occurred.

@@ -185,7 +185,7 @@ describe('Worker Endpoint Tests', () => {
   });
 
   describe('/token Endpoint Authentication', () => {
-    it('should return 400 if client sends malformed Basic authorization header', async () => {
+    it('should return 400 JSON error if client sends malformed Basic authorization header', async () => {
       const req = new Request('https://issuer.com/token', {
         method: 'POST',
         headers: {
@@ -197,10 +197,12 @@ describe('Worker Endpoint Tests', () => {
       const env = createMockEnv('https://authorized.com/callback');
       const res = await worker.fetch(req, env, mockCtx);
       expect(res.status).toBe(400);
-      expect(await res.text()).toBe('Invalid Basic Authentication encoding');
+      const body = (await res.json()) as any;
+      expect(body.error).toBe('invalid_client');
+      expect(body.error_description).toBe('Invalid Basic Authentication encoding');
     });
 
-    it('should return 400 if redirect_uri is unauthorized at /token', async () => {
+    it('should return 400 JSON error if redirect_uri is unauthorized at /token', async () => {
       const req = new Request('https://issuer.com/token', {
         method: 'POST',
         headers: {
@@ -212,7 +214,9 @@ describe('Worker Endpoint Tests', () => {
       const env = createMockEnv('https://authorized.com/callback');
       const res = await worker.fetch(req, env, mockCtx);
       expect(res.status).toBe(400);
-      expect(await res.text()).toBe('Unauthorized redirect_uri');
+      const body = (await res.json()) as any;
+      expect(body.error).toBe('invalid_request');
+      expect(body.error_description).toBe('Unauthorized redirect_uri');
     });
 
     it('should return 400 if grant_type is not authorization_code', async () => {
@@ -286,7 +290,9 @@ describe('Worker Endpoint Tests', () => {
       env.ALLOWED_CLIENT_IDS = 'allowed_app_only';
       const res = await worker.fetch(req, env, mockCtx);
       expect(res.status).toBe(400);
-      expect(await res.text()).toBe('Unauthorized client_id');
+      const body = (await res.json()) as any;
+      expect(body.error).toBe('invalid_client');
+      expect(body.error_description).toBe('Unauthorized client_id');
     });
   });
 
@@ -339,7 +345,7 @@ describe('Worker Endpoint Tests', () => {
       expect(body.scope).toContain('openid');
     });
 
-    it('should return 400 if Feishu token exchange fails', async () => {
+    it('should return 400 if Feishu token exchange fails (generic error, no Feishu details leaked)', async () => {
       mockedExchange.mockResolvedValue({
         code: 20050,
         error: 'server_error',
@@ -350,8 +356,8 @@ describe('Worker Endpoint Tests', () => {
       const res = await worker.fetch(tokenRequest(), env, mockCtx);
       expect(res.status).toBe(400);
       const body = (await res.json()) as any;
-      expect(body.error).toBe('invalid_request');
-      expect(body.error_description).toBe('boom');
+      expect(body.error).toBe('invalid_grant');
+      expect(body.error_description).toBe('Token exchange with upstream provider failed');
       expect(mockedGetUserInfo).not.toHaveBeenCalled();
     });
 
@@ -519,14 +525,22 @@ describe('Worker Endpoint Tests', () => {
   });
 
   describe('/test Diagnostic Page Endpoint', () => {
-    it('should return 200 OK with HTML content if DEBUG_PAGE is not false', async () => {
+    it('should return 200 OK with HTML content if DEBUG_PAGE is true', async () => {
       const req = new Request('https://issuer.com/test');
       const env = createMockEnv();
+      env.DEBUG_PAGE = 'true';
       const res = await worker.fetch(req, env, mockCtx);
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toContain('text/html');
       const text = await res.text();
       expect(text).toContain('OIDC Provider Diagnostic');
+    });
+
+    it('should return 404 if DEBUG_PAGE is not set (secure by default)', async () => {
+      const req = new Request('https://issuer.com/test');
+      const env = createMockEnv();
+      const res = await worker.fetch(req, env, mockCtx);
+      expect(res.status).toBe(404);
     });
 
     it('should return 404 if DEBUG_PAGE is false', async () => {

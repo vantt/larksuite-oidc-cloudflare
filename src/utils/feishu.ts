@@ -5,6 +5,9 @@ import type {
   FeishuUserInfoResponse,
 } from '@/types/feishu';
 
+/** Timeout for upstream Feishu API calls (10 seconds) */
+const FEISHU_FETCH_TIMEOUT_MS = 10_000;
+
 export class FeishuClient {
   /**
    * Exchange authorization code for a Feishu user access token.
@@ -34,24 +37,24 @@ export class FeishuClient {
           // matches the stored authorize redirect URI exactly.
           redirect_uri: encodeURIComponent(params.redirectUri),
         } satisfies FeishuAccessTokenRequest),
+        signal: AbortSignal.timeout(FEISHU_FETCH_TIMEOUT_MS),
       });
 
       const contentType = response.headers.get('Content-Type') || '';
       if (!contentType.includes('application/json')) {
-        const text = await response.text();
         return {
           code: response.status || -1,
           error: 'server_error',
-          error_description: `Feishu Token API returned non-JSON content (status ${response.status}): ${text.substring(0, 100)}`,
+          error_description: 'Feishu Token API returned an unexpected response',
         };
       }
 
       return (await response.json()) as FeishuAccessTokenResponse;
-    } catch (error: any) {
+    } catch {
       return {
         code: -1,
         error: 'server_error',
-        error_description: `Failed to exchange code for token with Feishu: ${error?.message || error}`,
+        error_description: 'Failed to communicate with Feishu Token API',
       };
     }
   }
@@ -68,23 +71,23 @@ export class FeishuClient {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
+        signal: AbortSignal.timeout(FEISHU_FETCH_TIMEOUT_MS),
       });
 
       const contentType = response.headers.get('Content-Type') || '';
       if (!contentType.includes('application/json')) {
-        const text = await response.text();
         return {
           code: response.status || -1,
-          msg: `Feishu UserInfo API returned non-JSON content (status ${response.status}): ${text.substring(0, 100)}`,
+          msg: 'Feishu UserInfo API returned an unexpected response',
           data: {} as any,
         };
       }
 
       return (await response.json()) as FeishuUserInfoResponse;
-    } catch (error: any) {
+    } catch {
       return {
         code: -1,
-        msg: `Failed to fetch user info from Feishu: ${error?.message || error}`,
+        msg: 'Failed to communicate with Feishu UserInfo API',
         data: {} as any,
       };
     }
