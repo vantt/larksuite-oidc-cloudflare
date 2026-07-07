@@ -1,8 +1,11 @@
 import { IssuerHelper } from './utils/issuer';
 import { NonceManager } from './utils/nonce';
 import { FeishuClient } from './utils/feishu';
-import { generateIdToken, transformEmail } from './utils/token';
+import { generateIdToken, transformEmail, hashToken } from './utils/token';
 import { transformFeishuScope, transformOpenIDScope } from './utils/scope';
+import { LarkAdapter } from './adapters/lark.adapter';
+import { KVCacheAdapter } from './adapters/kv-cache.adapter';
+import { LarkUserService } from './core/services/user.service';
 
 import { getFeishuEndpoints } from '@/types/feishu';
 import { testPageHtml } from './utils/test-page';
@@ -80,6 +83,58 @@ function validateClientId(clientId: string, env: Pick<Env, 'ALLOWED_CLIENT_IDS'>
   return null;
 }
 
+/**
+ * Resolves a user's departments and functional roles via the Lark Ports & Adapters layer.
+ * Fails gracefully to empty arrays so token/userinfo issuance is never blocked.
+ */
+async function resolveExtendedUserInfo(params: {
+  openId: string;
+  appId?: string;
+  appSecret?: string;
+  env: Env;
+  acceptLanguage: string;
+  bypassCache?: boolean;
+}): Promise<{ departments: string[]; departmentIds: string[]; functionalRoles: string[] }> {
+  const { openId, appId, appSecret, env, acceptLanguage, bypassCache = false } = params;
+  const empty = { departments: [], departmentIds: [], functionalRoles: [] };
+
+  if (!appId || !appSecret) {
+    console.warn('[ExtendedInfo] Lark application credentials (appId, appSecret) are missing!');
+    return empty;
+  }
+
+  try {
+    const larkAdapter = new LarkAdapter({ acceptLanguage });
+    const cacheAdapter = new KVCacheAdapter(env.StateNonceKV);
+    const userService = new LarkUserService(larkAdapter, cacheAdapter);
+
+    const isLark = env.LARK_MODE === 'true';
+    const apiDomain = isLark ? 'open.larksuite.com' : 'open.feishu.cn';
+
+    const roleIdsToCheck = (env.LARK_FUNCTIONAL_ROLE_IDS || '')
+      .split(',')
+      .map(r => r.trim())
+      .filter(Boolean);
+
+    console.log(`[ExtendedInfo] open_id: ${openId}, API Domain: ${apiDomain}, Roles to check: ${JSON.stringify(roleIdsToCheck)}, bypassCache: ${bypassCache}`);
+
+    const extendedInfo = await userService.getUserExtendedInfo({
+      openId,
+      appId,
+      appSecret,
+      apiDomain,
+      roleIdsToCheck,
+      bypassCache,
+    });
+
+    console.log(`[ExtendedInfo] Resolved departments: ${JSON.stringify(extendedInfo.departments)}, roles: ${JSON.stringify(extendedInfo.functionalRoles)}`);
+    return extendedInfo;
+  } catch (err) {
+    console.error('[ExtendedInfo] Failed to retrieve extended OIDC info:', err);
+    return empty;
+  }
+}
+
 /** Returns a plain-text error Response with explicit Content-Type. */
 function textError(message: string, status: number): Response {
   return new Response(message, {
@@ -155,6 +210,25 @@ export default {
       return new Response(testPageHtml, {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
+    }
+
+    // Endpoint to clear departments and roles lists cache
+    if (url.pathname === '/clear-cache' && request.method === 'POST') {
+      try {
+        await env.StateNonceKV.delete('cache:departments_list');
+        await env.StateNonceKV.delete('cache:roles_list');
+        console.log('[Cache] Departments and roles lists cache cleared successfully.');
+        return new Response(JSON.stringify({ success: true, message: 'Cache cleared successfully' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (err: any) {
+        console.error('[Cache] Failed to clear cache:', err);
+        return new Response(JSON.stringify({ success: false, error: err?.message || 'Failed to clear cache' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     // JWKS endpoint - provides public keys for verifying JWT signatures
@@ -419,6 +493,18 @@ export default {
           { code: 0; refresh_token: string }
         >;
 
+      // Cache client credentials to KV for use in the OIDC /userinfo endpoint
+      try {
+        const tokenHash = await hashToken(access_token);
+        await env.StateNonceKV.put(
+          `client_creds:${tokenHash}`,
+          JSON.stringify({ clientId, clientSecret }),
+          { expirationTtl: expires_in || 7200 }
+        );
+      } catch (err) {
+        console.error('Failed to cache client credentials in KV:', err);
+      }
+
       // Get user info using access_token
       const userInfo = await FeishuClient.getUserInfo(access_token, feishuEndpoints);
 
@@ -437,6 +523,16 @@ export default {
         await nonceManager.deleteCodeNonce(code);
       }
 
+      // Resolve departments & functional roles to embed as ID Token identity claims.
+      const acceptLanguage = request.headers.get('Accept-Language') || env.DEFAULT_LOCALE || 'en-US';
+      const { departments, functionalRoles } = await resolveExtendedUserInfo({
+        openId: userInfo.data.open_id,
+        appId: clientId,
+        appSecret: clientSecret,
+        env,
+        acceptLanguage,
+      });
+
       // Generate OIDC response with required cache headers (RFC 6749 §5.1)
       try {
         return new Response(
@@ -452,6 +548,8 @@ export default {
               domain: env.DOMAIN,
               jwtKeyId: env.JWT_KEY_ID,
               jwtPrivateKeyPem: env.JWT_PRIVATE_KEY_PEM,
+              departments,
+              functionalRoles,
             }),
             expires_in,
             scope: transformFeishuScope(scope),
@@ -487,6 +585,37 @@ export default {
         return textError('Failed to fetch user info', 401);
       }
 
+      // Resolve departments & functional roles via Hexagonal Ports & Adapters.
+      let appId = env.APP_LARK_ID;
+      let appSecret = env.APP_LARK_SECRET;
+
+      // Try to dynamically retrieve client credentials from KV cache using the access token
+      try {
+        const tokenHash = await hashToken(accessToken);
+        const cachedCredsStr = await env.StateNonceKV.get(`client_creds:${tokenHash}`);
+        if (cachedCredsStr) {
+          const { clientId, clientSecret } = JSON.parse(cachedCredsStr);
+          if (clientId) appId = clientId;
+          if (clientSecret) appSecret = clientSecret;
+          console.log('[UserInfo] Retrieved client credentials dynamically from KV cache.');
+        }
+      } catch (err) {
+        console.warn('[UserInfo] Failed to retrieve cached client credentials from KV:', err);
+      }
+
+      const bypassCache = url.searchParams.get('bypass_cache') === 'true' ||
+                          request.headers.get('Cache-Control') === 'no-cache' ||
+                          request.headers.get('Pragma') === 'no-cache';
+
+      const { departments, functionalRoles } = await resolveExtendedUserInfo({
+        openId: userInfoFeishu.data.open_id,
+        appId,
+        appSecret,
+        env,
+        acceptLanguage: request.headers.get('Accept-Language') || env.DEFAULT_LOCALE || 'en-US',
+        bypassCache,
+      });
+
       return new Response(
         JSON.stringify({
           sub: userInfoFeishu.data.open_id,
@@ -496,7 +625,13 @@ export default {
           picture: userInfoFeishu.data.avatar_url,
           phone_number: userInfoFeishu.data.mobile || undefined,
           preferred_username: userInfoFeishu.data.name || undefined,
-        } satisfies OpenIDUserInfoSuccessResponse),
+          // Comma-separated strings for Cloudflare Access compatibility (drops array claims).
+          departments: departments.join(','),
+          functional_roles: functionalRoles.join(','),
+        } satisfies OpenIDUserInfoSuccessResponse & {
+          departments?: string;
+          functional_roles?: string;
+        }),
         {
           headers: { 'Content-Type': 'application/json' },
         }

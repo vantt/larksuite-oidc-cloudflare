@@ -48,7 +48,42 @@ graph TD
 
 ---
 
-## 2. Dynamic Multi-tenant Design
+## 2. Software Architecture (Hexagonal Architecture & Clean Code)
+
+To ensure high testability, maintenance, and decoupling of core domain logic from external runtime frameworks (like Cloudflare Workers and Lark Open API endpoints), the gateway follows the **Hexagonal Architecture (Ports & Adapters)** design pattern:
+
+```mermaid
+graph TD
+    subgraph Core Domain
+        UserService[LarkUserService]
+    end
+    subgraph Ports
+        IP[LarkPort]
+        CP[CachePort]
+    end
+    subgraph Adapters
+        LA[LarkAdapter]
+        KVA[KVStoreAdapter]
+    end
+    
+    UserService --> IP
+    UserService --> CP
+    LA -- Implements --> IP
+    KVA -- Implements --> CP
+```
+
+### Core Components
+- **Core Domain Service (`LarkUserService`)**: Contains pure business logic for retrieving user details, resolving department localized names, checking functional role memberships, and managing cache keys and TTL structures. It has zero knowledge of HTTP request libraries, Fetch API details, or Cloudflare KV API.
+- **Port Interfaces**:
+  - `LarkPort`: Defines the capabilities required to query Lark (access tokens, user details, department names, role members).
+  - `CachePort`: Defines the capabilities required to cache key-value entries (get, put).
+- **Adapters**:
+  - `LarkAdapter`: Implements `LarkPort` using standard Fetch requests directed at `open.larksuite.com` or `open.feishu.cn`.
+  - `KVCacheAdapter`: Implements `CachePort` wrapping Cloudflare Worker's `KVNamespace`.
+
+---
+
+## 3. Dynamic Multi-tenant Design
 
 In typical OIDC proxy setups, the `client_id` and `client_secret` of the Identity Provider (Lark) are hardcoded in the proxy server environment. 
 
@@ -63,10 +98,13 @@ This gateway removes that limitation by dynamically extracting credentials from 
    - Because Lark requires pre-registered redirect URLs in its Developer Console, the Gateway encodes the client's actual destination redirect URL directly into its own callback path:
      `https://<gateway-domain>/callback/<encoded-client-redirect-uri>`
    - This approach lets the Gateway route responses to the correct client without maintaining an internal routing database or state mapping.
+4. **Dynamic UserInfo Credentials Retrieval**:
+   - Because the standard OIDC `/userinfo` request only contains a Bearer access token and does not provide client credentials, the Gateway caches the `client_id` and `client_secret` in the Cloudflare KV store during the `/token` code exchange phase, keyed by the issued `access_token` (with a TTL matching the token's lifetime).
+   - When the client calls `/userinfo`, the Gateway retrieves these credentials from the KV cache to authenticate with Lark's server-side APIs (Contact and Roles endpoints). This enables a fully generic, zero-config OIDC gateway for multiple Lark applications.
 
 ---
 
-## 3. Sequence Flows
+## 4. Sequence Flows
 
 The following diagrams detail the authentication, callback, and token exchange sequences.
 
@@ -171,7 +209,7 @@ sequenceDiagram
 
 ---
 
-## 4. State Management (KV Storage)
+## 5. State Management (KV Storage)
 
 To maintain OIDC compliance (especially for anti-replay `nonce` verification), the Gateway uses Cloudflare KV namespaces for temporary storage:
 
@@ -187,7 +225,7 @@ To maintain OIDC compliance (especially for anti-replay `nonce` verification), t
 
 ---
 
-## 5. User Claims Mapping
+## 6. User Claims Mapping
 
 Lark Suite returns different email formats depending on the organization settings. The Gateway maps these claims differently depending on the endpoint:
 
@@ -205,16 +243,19 @@ Lark Suite returns different email formats depending on the organization setting
 
 **b) UserInfo Endpoint (`/userinfo`)** — Returns additional claims (Not embedded in the ID Token):
 
-| OIDC Claim | Lark Source Value |
-| :--- | :--- |
-| `phone_number` | `mobile` (Optional) |
-| `preferred_username` | `name` (Optional) |
+| OIDC Claim | Lark Source Value | Description |
+| :--- | :--- | :--- |
+| `phone_number` | `mobile` (Optional) | User's mobile phone number. |
+| `preferred_username` | `name` (Optional) | User's preferred display name. |
+| `departments` | Resolved via `GET /open-apis/contact/v3/departments/:department_id` | Localized department names resolved from Lark's Contact API. Cached in KV (`cache:dept_name:${departmentId}`) for 1 hour. |
+| `department_ids` | `department_ids` from `GET /open-apis/contact/v3/users/:user_id` | Array of department IDs the user belongs to. |
+| `functional_roles` | Matching IDs from `GET /open-apis/contact/v3/functional_roles/:role_id/members` | Array of matched functional role IDs. Check is performed against both the user's `open_id` and their `department_ids`. Cached in KV (`cache:role_members:${roleId}`) for 10 minutes. |
 
 > ⚠️ The `/userinfo` endpoint only reads `data.email` and does not apply the fallback logic (`enterprise_email` or `name@DOMAIN`) used in the ID Token. This inconsistency should be reviewed.
 
 ---
 
-## 6. Key Design Benefits
+## 7. Key Design Benefits
 
 - **Zero Maintenance**: You do not need to configure or redeploy the Gateway when protecting new applications. Simply register the new app on Lark Open Platform, configure Cloudflare Access, and the gateway handles credentials dynamically.
 - **Serverless & Edge Native**: Deployed on Cloudflare Workers, providing fast response times (< 50ms) and minimal operational overhead.
@@ -222,7 +263,7 @@ Lark Suite returns different email formats depending on the organization setting
 
 ---
 
-## 7. Endpoint Management (`IssuerHelper`)
+## 8. Endpoint Management (`IssuerHelper`)
 
 Path composition logic is central to `src/utils/issuer.ts` (`IssuerHelper`). It dynamically builds paths based on environment variables:
 
@@ -236,7 +277,7 @@ Path composition logic is central to `src/utils/issuer.ts` (`IssuerHelper`). It 
 
 ---
 
-## 8. Gateway Endpoint Reference
+## 9. Gateway Endpoint Reference
 
 | Path (Default) | Method | Description | Configuration Variable |
 | :--- | :--- | :--- | :--- |
@@ -249,7 +290,7 @@ Path composition logic is central to `src/utils/issuer.ts` (`IssuerHelper`). It 
 
 ---
 
-## 9. Environment Variables Reference
+## 10. Environment Variables Reference
 
 | Variable | Required | Description |
 | :--- | :--- | :--- |
@@ -261,12 +302,15 @@ Path composition logic is central to `src/utils/issuer.ts` (`IssuerHelper`). It 
 | `ALLOWED_REDIRECT_URIS` | No | Comma-separated list of allowed client redirect URLs. If empty, all URLs are allowed. Recommended to set in production. |
 | `LARK_MODE` | No | Set to `true` for Lark Suite (Global). Omit or set to `false` for Feishu (China). |
 | `DEBUG_PAGE` | No | Set to `false` in production to disable the interactive testing console `/test`. |
+| `APP_LARK_ID` | No | Lark/Feishu App ID. Required to resolve user departments and functional roles. |
+| `APP_LARK_SECRET` | No | Lark/Feishu App Secret. Required to resolve user departments and functional roles. |
+| `LARK_FUNCTIONAL_ROLE_IDS` | No | Comma-separated list of Lark functional role IDs to match user membership (e.g. `role_1,role_2`). |
 | `ISSUER_AUTH_PATH` ... | No | Custom overrides for OIDC path names. |
 | KV Bindings | Yes | `StateNonceKV` and `CodeNonceKV` bindings in `wrangler.jsonc`. |
 
 ---
 
-## 10. Scope Mappings (OIDC ↔ Lark)
+## 11. Scope Mappings (OIDC ↔ Lark)
 
 The Gateway maps OIDC scopes to Lark API scopes during authorization (`transformOpenIDScope`) and handles the inverse mapping during token response (`transformFeishuScope`).
 
@@ -281,7 +325,7 @@ The Gateway maps OIDC scopes to Lark API scopes during authorization (`transform
 
 ---
 
-## 11. Cloudflare Access IdP Settings (Generic OIDC)
+## 12. Cloudflare Access IdP Settings (Generic OIDC)
 
 Configure the OIDC settings manually in Cloudflare Zero Trust:
 
@@ -299,7 +343,7 @@ Configure the OIDC settings manually in Cloudflare Zero Trust:
 
 ---
 
-## 12. Known Limitations & Security Considerations
+## 13. Known Limitations & Security Considerations
 
 | ID | Issue | Severity | Description / Mitigation |
 | :--- | :--- | :--- | :--- |

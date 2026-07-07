@@ -25,6 +25,10 @@ export interface IdTokenConfig {
   domain?: string;
   jwtKeyId: string;
   jwtPrivateKeyPem: string;
+  /** User's resolved department names (OIDC identity claim). */
+  departments?: string[];
+  /** User's resolved functional role names (OIDC identity claim). */
+  functionalRoles?: string[];
 }
 
 async function getPrivateKey(pem: string): Promise<CryptoKey> {
@@ -49,6 +53,8 @@ export async function generateIdToken({
   domain,
   jwtKeyId,
   jwtPrivateKeyPem,
+  departments,
+  functionalRoles,
 }: IdTokenConfig): Promise<string> {
   if (!jwtPrivateKeyPem) {
     throw new Error('JWT signing key (JWT_PRIVATE_KEY_PEM) is not configured');
@@ -60,7 +66,10 @@ export async function generateIdToken({
   const now = Math.floor(Date.now() / 1000);
   const hasRealEmail = !!(userInfo.enterprise_email || userInfo.email);
 
-  const payload: OpenIDToken = {
+  const payload: OpenIDToken & {
+    departments?: string;
+    functional_roles?: string;
+  } = {
     // OIDC required claims
     iss: issuer,
     sub: userInfo.open_id,
@@ -75,6 +84,12 @@ export async function generateIdToken({
     email: transformEmail(userInfo, domain),
     email_verified: hasRealEmail,
     picture: userInfo.avatar_url,
+
+    // Extended identity claims (departments & functional roles).
+    // Serialized as comma-separated strings: Cloudflare Access (generic OIDC)
+    // only surfaces string-valued custom claims and silently drops arrays/objects.
+    ...(departments && { departments: departments.join(',') }),
+    ...(functionalRoles && { functional_roles: functionalRoles.join(',') }),
   };
 
   const privateKey = await getPrivateKey(jwtPrivateKeyPem);
@@ -83,4 +98,15 @@ export async function generateIdToken({
   return await new jose.SignJWT(payload)
     .setProtectedHeader({ alg: 'RS256', kid: jwtKeyId })
     .sign(privateKey);
+}
+
+/**
+ * Hashes a token using SHA-256 to create a safe, short key (64 hex characters) for KV storage.
+ */
+export async function hashToken(token: string): Promise<string> {
+  const msgBuffer = new TextEncoder().encode(token);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }

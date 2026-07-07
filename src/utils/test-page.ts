@@ -74,9 +74,12 @@ export const testPageHtml = `<!DOCTYPE html>
               <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Requested Scopes</label>
               <input type="text" id="scopes" class="w-full bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono transition" value="openid profile email">
             </div>
-            <div class="pt-2">
-              <button onclick="saveConfig()" class="w-full bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg py-2 text-xs font-semibold text-gray-300 transition duration-200">
-                Save to Local Storage
+            <div class="pt-2 flex gap-2">
+              <button onclick="saveConfig()" class="flex-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg py-2 text-xs font-semibold text-gray-300 transition duration-200">
+                Save Config
+              </button>
+              <button onclick="clearCache()" class="flex-1 bg-red-950/40 hover:bg-red-900/40 border border-red-500/30 rounded-lg py-2 text-xs font-semibold text-red-400 transition duration-200">
+                Clear Cache
               </button>
             </div>
           </div>
@@ -189,31 +192,35 @@ export const testPageHtml = `<!DOCTYPE html>
             <span id="badge-userinfo" class="text-xs px-2.5 py-0.5 rounded-full bg-gray-800 text-gray-400 font-medium">Locked</span>
           </div>
 
-          <div class="mt-5 ml-8">
+          <div class="mt-5 ml-8 flex items-center gap-4">
             <button id="btn-userinfo" onclick="fetchUserInfo()" disabled class="bg-pink-600 hover:bg-pink-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-medium px-5 py-2.5 rounded-xl transition duration-200 flex items-center">
               <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
               </svg>
               Fetch UserInfo Profile
             </button>
+            <label class="inline-flex items-center text-xs text-gray-400 cursor-pointer select-none">
+              <input type="checkbox" id="bypassCache" class="rounded bg-gray-900 border-gray-700 text-pink-600 focus:ring-pink-500 focus:ring-offset-gray-900 mr-2">
+              Bypass Cache (Force Lark Reload)
+            </label>
+          </div>
 
-            <!-- Loading spinner -->
-            <div id="userinfo-loading" class="hidden mt-4 flex items-center text-sm text-gray-400">
-              <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-pink-500" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              Retrieving profile data...
-            </div>
+          <!-- Loading spinner -->
+          <div id="userinfo-loading" class="hidden mt-4 flex items-center text-sm text-gray-400">
+            <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-pink-500" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Retrieving profile data...
+          </div>
 
-            <!-- Error display -->
-            <div id="userinfo-error" class="hidden mt-4 p-4 rounded-xl bg-red-950/50 border border-red-500/30 text-red-300 text-sm">
-            </div>
+          <!-- Error display -->
+          <div id="userinfo-error" class="hidden mt-4 p-4 rounded-xl bg-red-950/50 border border-red-500/30 text-red-300 text-sm">
+          </div>
 
-            <!-- Profile results -->
-            <div id="userinfo-results" class="hidden mt-6 bg-gray-950 border border-gray-800 rounded-xl p-4">
-              <pre class="text-xs text-pink-400 font-mono overflow-x-auto whitespace-pre-wrap" id="res-userinfo-data"></pre>
-            </div>
+          <!-- Profile results -->
+          <div id="userinfo-results" class="hidden mt-6 bg-gray-950 border border-gray-800 rounded-xl p-4">
+            <pre class="text-xs text-pink-400 font-mono overflow-x-auto whitespace-pre-wrap" id="res-userinfo-data"></pre>
           </div>
         </div>
       </div>
@@ -428,7 +435,9 @@ export const testPageHtml = `<!DOCTYPE html>
       loader.classList.remove('hidden');
 
       try {
-        const response = await fetch('/userinfo', {
+        const bypass = document.getElementById('bypassCache').checked;
+        const url = bypass ? '/userinfo?bypass_cache=true' : '/userinfo';
+        const response = await fetch(url, {
           headers: {
             'Authorization': 'Bearer ' + state.accessToken
           }
@@ -457,6 +466,25 @@ export const testPageHtml = `<!DOCTYPE html>
         document.getElementById('badge-userinfo').innerText = 'Failed';
         document.getElementById('badge-userinfo').className = 'text-xs px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-400 font-medium';
         document.getElementById('step-userinfo').classList.add('border-red-500/30');
+      }
+    }
+
+    async function clearCache() {
+      if (!confirm('Are you sure you want to clear the organization departments and roles list cache?')) {
+        return;
+      }
+      try {
+        const response = await fetch('/clear-cache', {
+          method: 'POST'
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+          alert('Cache cleared successfully!');
+        } else {
+          alert('Failed to clear cache: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Network error clearing cache: ' + err.message);
       }
     }
   </script>

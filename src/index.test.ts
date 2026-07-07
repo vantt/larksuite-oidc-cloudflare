@@ -11,6 +11,7 @@ vi.mock('./utils/feishu', () => ({
 vi.mock('./utils/token', () => ({
   generateIdToken: vi.fn(async () => 'mock.id.token'),
   transformEmail: vi.fn(() => 'mock@example.com'),
+  hashToken: vi.fn(async (token) => `hash_${token}`),
 }));
 
 import workerImpl from './index';
@@ -522,6 +523,10 @@ describe('Worker Endpoint Tests', () => {
       expect(body.picture).toBe('https://avatar/x.png');
       expect(body.phone_number).toBe('+8613000000000');
       expect(body.preferred_username).toBe('Test User');
+      // Comma-separated strings (Cloudflare Access drops array-valued claims); empty when unresolved.
+      expect(body.departments).toBe('');
+      expect(body.functional_roles).toBe('');
+      expect(body.department_ids).toBeUndefined();
     });
   });
 
@@ -561,6 +566,33 @@ describe('Worker Endpoint Tests', () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as any;
       expect(body.response_types_supported).toEqual(['code']);
+    });
+  });
+
+  describe('/clear-cache Endpoint', () => {
+    it('should clear departments and roles list from KV on POST request', async () => {
+      const req = new Request('https://issuer.com/clear-cache', { method: 'POST' });
+      const env = createMockEnv();
+
+      // Seed KV with list cache values
+      await env.StateNonceKV.put('cache:departments_list', 'some_departments');
+      await env.StateNonceKV.put('cache:roles_list', 'some_roles');
+
+      const res = await worker.fetch(req, env, mockCtx);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.success).toBe(true);
+
+      // Verify they are deleted from KV
+      expect(await env.StateNonceKV.get('cache:departments_list')).toBeNull();
+      expect(await env.StateNonceKV.get('cache:roles_list')).toBeNull();
+    });
+
+    it('should return 404 for GET request to /clear-cache', async () => {
+      const req = new Request('https://issuer.com/clear-cache', { method: 'GET' });
+      const env = createMockEnv();
+      const res = await worker.fetch(req, env, mockCtx);
+      expect(res.status).toBe(404);
     });
   });
 });

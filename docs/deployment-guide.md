@@ -187,7 +187,9 @@ Open the **`wrangler.jsonc`** file at the project root and update the IDs in the
 
 ### Step 5 — Configure Environment Variables & Secrets (Production)
 
-Set up your Worker's environment variables via the Cloudflare Dashboard (or using `wrangler secret put`):
+**⚠️ Do not set plain-text variables via the Cloudflare Dashboard.** This project declares them in `wrangler.jsonc` under `vars`, and every `wrangler deploy` overwrites the deployed values with whatever is in that file — a Dashboard-only edit gets silently reverted on the next deploy. `"keep_vars": true` only protects vars that are **absent** from `wrangler.jsonc`; it does not protect vars that are declared there.
+
+**Plain variables — edit `wrangler.jsonc` → `vars`, commit, then redeploy:**
 
 - **`ISSUER_BASE_URL`**: Public URL of your deployed Worker (e.g., `https://lark-oidc.yourdomain.workers.dev`, **no trailing slash `/`**).
 - **`DOMAIN`**: Default fallback domain for pseudo emails if the user lacks an email (e.g., `yourcompany.com`).
@@ -195,9 +197,23 @@ Set up your Worker's environment variables via the Cloudflare Dashboard (or usin
 - **`DEBUG_PAGE`**: Set to `false` in production to disable the `/test` page for security.
 - **`JWT_KEY_ID`**: Key ID generated in Step 2.
 - **`JWT_PUBLIC_KEY_JWK`**: Public key JWK generated in Step 2.
-- **`JWT_PRIVATE_KEY_PEM`**: Private key PEM generated in Step 2 (configure as a **Secret**).
-- **`ALLOWED_REDIRECT_URIS`**: Callback URL of your Cloudflare Access tenant:
-  `https://<your-team-name>.cloudflareaccess.com/cdn-cgi/access/callback`
+- **`ALLOWED_REDIRECT_URIS`**: Comma-separated allowlist. Must include the callback URL of every OIDC client that calls this Worker's `/auth` endpoint — for a Cloudflare Access IdP integration, that is your Access team's callback: `https://<your-team-name>.cloudflareaccess.com/cdn-cgi/access/callback`. Add one entry per client (Access team domain, local dev, etc.), comma-separated, no spaces around the values need not be trimmed manually — the Worker trims each entry.
+- **`ALLOWED_CLIENT_IDS`** (optional): Comma-separated Lark App IDs allowed to use this gateway.
+- **`LARK_FUNCTIONAL_ROLE_IDS`** (optional): Comma-separated Lark functional role IDs to resolve into the `functional_roles` claim.
+- **`DEFAULT_LOCALE`** (optional): Fallback `Accept-Language` for resolving department/role names.
+
+**Secrets — never in `wrangler.jsonc`, set via `wrangler secret put <NAME>` (not touched by `wrangler deploy`):**
+
+- **`JWT_PRIVATE_KEY_PEM`**: Private key PEM generated in Step 2.
+- **`APP_LARK_SECRET`**: Lark App Secret, used to resolve `departments` / `functional_roles` claims.
+
+#### Updating a variable later (e.g. adding a new redirect_uri)
+
+1. Edit the value directly in `wrangler.jsonc` (e.g. append to `ALLOWED_REDIRECT_URIS`).
+2. Commit the change.
+3. Run `pnpm deploy` (or `npm run deploy`).
+
+Editing the same variable via the Dashboard "works" until the next deploy, then silently reverts — always edit `wrangler.jsonc`.
 
 ---
 

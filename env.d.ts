@@ -22,4 +22,8 @@ interface Env extends Cloudflare.Env {
   ISSUER_CALLBACK_PREFIX?: string;
   LARK_MODE?: string;
   DEBUG_PAGE?: string;
+  APP_LARK_ID?: string;
+  APP_LARK_SECRET?: string;
+  LARK_FUNCTIONAL_ROLE_IDS?: string;
+  DEFAULT_LOCALE?: string;
 }

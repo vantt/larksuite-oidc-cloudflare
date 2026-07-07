@@ -15,7 +15,6 @@
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */
 	// "placement": { "mode": "smart" }
-
 	/**
 	 * Bindings
 	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
@@ -33,7 +32,6 @@
 		},
 	],
 	"keep_vars": true,
-
 	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
@@ -45,8 +43,8 @@
 		"DEBUG_PAGE": "false",
 		"JWT_KEY_ID": "5437f0cd4f62f44f",
 		"JWT_PUBLIC_KEY_JWK": "{\"kty\":\"RSA\",\"n\":\"vcPNTGrUGcvFafSL5BceoqPUviRO2aBsJ-sey9LwWBczB-kcnCvlsmOTKHiQ2Jb1Idf8lVxKA2vRu6VPQXgK_o7KYSVRJkfZ46-k3iIQZl4UTlFC3GpXZu4qkXyJqJQWySiYDah9Am4wed5c8iPwx2TaKumyWA13VKhHMUdilFIqI06LRP1N1Yk0VqmJAo_jx1Yb7NDNqVW_EZ4YTxD5keZEszBToGiJtqCV-b-Gt3BZ5-QBe0BiFYsIjD7L7rkvU6DWygpubvNwz9kCKArfzZm3kgdhuXA_zbldjVLH7zswEIhL6JbR-5-vBlPag81vPFmO2BfS5sTn8NYxZ2s9WQ\",\"e\":\"AQAB\",\"kid\":\"5437f0cd4f62f44f\",\"alg\":\"RS256\",\"use\":\"sig\"}",
+		"ALLOWED_REDIRECT_URIS": "https://fgcare.cloudflareaccess.com/cdn-cgi/access/callback,https://larksuite-oidc.admin-1d2.workers.dev/callback,http://localhost:8787/callback,http://localhost:8787/test,http://127.0.0.1:8787/test,http://127.0.0.1:8787/callback",
 	},
-
 	/**
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
