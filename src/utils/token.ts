@@ -71,6 +71,7 @@ export async function generateIdToken({
 
     // Standard claims
     name: userInfo.name,
+    full_name: userInfo.name,
     email: transformEmail(userInfo, domain),
     email_verified: hasRealEmail,
     picture: userInfo.avatar_url,

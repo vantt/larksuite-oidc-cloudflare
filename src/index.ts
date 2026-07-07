@@ -491,6 +491,7 @@ export default {
         JSON.stringify({
           sub: userInfoFeishu.data.open_id,
           name: userInfoFeishu.data.name,
+          full_name: userInfoFeishu.data.name,
           email: transformEmail(userInfoFeishu.data, env.DOMAIN),
           picture: userInfoFeishu.data.avatar_url,
           phone_number: userInfoFeishu.data.mobile || undefined,

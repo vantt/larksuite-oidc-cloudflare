@@ -83,6 +83,7 @@ describe('Token Utilities', () => {
       expect(payload.sub).toBe('usr_123');
       expect(payload.nonce).toBe('nonce_xyz');
       expect(payload.name).toBe('Test User');
+      expect(payload.full_name).toBe('Test User');
       expect(payload.email).toBe('test@example.com');
       expect(payload.picture).toBe('https://avatar.com/test.png');
     });

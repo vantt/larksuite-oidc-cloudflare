@@ -548,6 +548,11 @@ export type OpenIDStandardClaims = {
   name: string;
 
   /**
+   * End-User's full name (custom/extended claim to support client mappers).
+   */
+  full_name?: string;
+
+  /**
    * Given name(s) or first name(s) of the End-User.
    * Note that in some cultures, people can have multiple given names;
    * all can be present, with the names being separated by space characters.

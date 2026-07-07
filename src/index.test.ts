@@ -517,6 +517,7 @@ describe('Worker Endpoint Tests', () => {
       const body = (await res.json()) as any;
       expect(body.sub).toBe('ou_123');
       expect(body.name).toBe('Test User');
+      expect(body.full_name).toBe('Test User');
       expect(body.email).toBe('mock@example.com');
       expect(body.picture).toBe('https://avatar/x.png');
       expect(body.phone_number).toBe('+8613000000000');
